@@ -301,4 +301,4 @@ function poll() {
     setTimeout(runTask, POLL_DURATION);
 }
 
-poll();
+runTask();
