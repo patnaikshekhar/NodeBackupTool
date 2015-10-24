@@ -1,5 +1,7 @@
-var DURATION = 24 * 60 * 1000;
-var FOLDER_NAME =  'public_html';
+var POLL_DURATION = parseInt(process.env.POLL_DURATION);
+var WAIT_DURATION = parseInt(process.env.WAIT_DURATION);
+
+var FOLDER_NAME =  process.env.BACKUP_FOLDER;
 var DOWNLOAD_DEST = './downloads'
 
 var USERNAME = process.env.FTP_USER_NAME;
@@ -15,6 +17,7 @@ var fs = require('fs');
 
 var INFO = 'Info';
 var ERROR = 'Error';
+var WARNING = 'Warning';
 
 var S3FS = require('s3fs');
 var fsImpl = new S3FS(S3_BUCKET, {
@@ -22,12 +25,62 @@ var fsImpl = new S3FS(S3_BUCKET, {
     secretAccessKey: S3_SECRET_ACCESS_KEY
 });
 
+var pg = require('pg');
+var DATABASE_URL = process.env.DATABASE_URL;
+
+var nodemailer = require('nodemailer');
+var transporter = nodemailer.createTransport({
+    service: 'Gmail',
+    auth: {
+        user: process.env.GMAIL_USER,
+        pass: process.env.GMAIL_PASSWORD
+    }
+});
+
+var EMAIL_TO_ADDRESS = process.env.EMAIL_TO_ADDRESS;
+
 
 function log(level, phrase) {
     var date = new Date();
     console.log(level, date.toISOString(), phrase);
     var logStream = fs.createWriteStream('log.txt', {'flags': 'a'});
     logStream.end(level + '\t' + date.toISOString() + '\t' + phrase + '\n');
+
+    if (level === ERROR) {
+        sendErrorEmail(phrase);
+    }
+}
+
+function sendErrorEmail(err) {
+    var mailOptions = {
+        from: 'Backup Service <' + process.env.GMAIL_USER + '>', // sender address
+        to: EMAIL_TO_ADDRESS, // list of receivers
+        subject: 'Backup - Error', // Subject line
+        text: 'An error occured in backup: ' + err, // plaintext body
+    };
+
+    sendEmail(mailOptions);
+}
+
+function sendSuccessEmail(err) {
+    var mailOptions = {
+        from: 'Backup Service <' + process.env.GMAIL_USER + '>', // sender address
+        to: EMAIL_TO_ADDRESS, // list of receivers
+        subject: 'Backup - Success', // Subject line
+        text: 'The backup of ' + FOLDER_NAME + ' was successful', // plaintext body
+    };
+
+    sendEmail(mailOptions);
+}
+
+function sendEmail(mailOptions) {
+    transporter.sendMail(mailOptions, function(error, info){
+        if(error) {
+            return log(WARNING, error);
+        }
+
+        log(INFO, 'Email Message sent: ' + info.response);
+    });
 }
 
 function ftpFile(callback) {
@@ -41,8 +94,9 @@ function ftpFile(callback) {
         downloadFolder(c, FOLDER_NAME, function(err) {
             if (err) {
                 log(ERROR, err);
+                callback();
             } else {
-                log(INFO, 'Finished downloading' + FOLDER_NAME);
+                log(INFO, 'Finished downloading ' + FOLDER_NAME);
                 c.end();
                 callback();
             }
@@ -50,7 +104,8 @@ function ftpFile(callback) {
     });
 
     c.on('error', function(err) {
-        log(ERROR, err);
+        log(ERROR, 'Connection error ' + err);
+        callback();
     });
 
     c.connect({
@@ -151,16 +206,99 @@ function downloadFolder(conn, folder, callback) {
         
 }
 
+function logRun(callback) {
+    log(INFO, 'Inserting run data');
+    pg.connect(DATABASE_URL, function(err, client, done) {
+        if (err) {
+            log(ERROR, 'Cannot connect to database ' + db);
+            done();
+            callback(err);
+        } else {
+            client.query('INSERT INTO lastrun (date) VALUES ($1)', [new Date()], function(err, result) {
+                if (err) {
+                    log(ERROR, 'Cannot connect to database ' + db);
+                    done();
+                    callback(err);
+                } else {
+                    log(INFO, 'Inserted run data');
+                    done();
+                    callback(null);
+                }       
+            });
+        }
+    });
+}
+
+function checkLastRun(callback) {
+    log(INFO, 'Checking last run data');
+
+    pg.connect(DATABASE_URL, function(err, client, done) {
+        if (err) {
+            log(ERROR, 'Cannot connect to database ' + err);
+            done();
+            callback(err, null);
+        } else {
+            client.query('SELECT date FROM lastrun ORDER BY date DESC', function(err, result) {
+                if (err) {
+                    log(ERROR, 'Cannot connect to database ' + err);
+                    done();
+                    callback(err, null);
+                } else {
+                    done();
+                    callback(null, result);
+                }       
+            });
+        }
+    });
+}
+
+function logAndStartRun() {
+    logRun(function(err) {
+        if (err) {
+            log(ERROR, 'Cannot insert row ' + err);
+            return;
+        } else {
+            log(INFO, 'Starting worker');
+            ftpFile(function() {
+                sendSuccessEmail();
+                poll();
+            });
+            //poll();
+        }
+    });
+}
+
 function runTask() {
     log(INFO, 'Running Task');
-    ftpFile(function() {
-        startWorker();
-    }); 
+    checkLastRun(function(err, result) {
+        if (err) {
+            // Fail after logging
+            log(ERROR, 'Error quering row ' + err);
+            poll();
+            return;
+        } else {
+            if (result.rowCount > 0) {
+                var d = result.rows[0].date;
+                log(INFO, 'Last run was at ' + d);
+
+                var dateDifference = (new Date()) - d;
+                if (dateDifference > WAIT_DURATION) {
+                    log(INFO, 'Time difference was met starting run');
+                    logAndStartRun();
+                } else {
+                    log(INFO, 'Time difference was not met waiting');
+                    poll();
+                }
+            } else { 
+                logAndStartRun();
+            }
+        }
+    });   
 }
 
-function startWorker() {
-    log(INFO, 'Waiting for ' + DURATION);
-    setTimeout(runTask, DURATION);
+function poll() {
+    log(INFO, 'Waiting for ' + POLL_DURATION);
+    setTimeout(runTask, POLL_DURATION);
 }
 
-runTask();
+poll();

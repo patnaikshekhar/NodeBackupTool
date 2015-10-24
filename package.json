@@ -11,6 +11,8 @@
   "license": "ISC",
   "dependencies": {
     "ftp": "^0.3.10",
+    "nodemailer": "^1.8.0",
+    "pg": "^4.4.3",
     "s3fs": "^2.3.0"
   }
 }
