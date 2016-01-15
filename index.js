@@ -142,7 +142,8 @@ function downloadFolder(conn, folder, callback) {
             } else {
                 list.forEach(function(element, index) {
                     if (element.type === 'd') {
-                        if (element.name !== '.' && element.name !== '..' && element.name.indexOf('pic_gallery') == -1) {
+                        //if (element.name !== '.' && element.name !== '..' && element.name.indexOf('pic_gallery') == -1) {
+                        if (element.name !== '.' && element.name !== '..') {
                             subFolders.push(element.name);
                         }
                     } else {
