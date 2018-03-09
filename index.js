@@ -22,7 +22,8 @@ var WARNING = 'Warning';
 var S3FS = require('s3fs');
 var fsImpl = new S3FS(S3_BUCKET, {
     accessKeyId: S3_ACCESS_KEY_ID,
-    secretAccessKey: S3_SECRET_ACCESS_KEY
+    secretAccessKey: S3_SECRET_ACCESS_KEY,
+    region: 'ap-south-1'
 });
 
 var pg = require('pg');
